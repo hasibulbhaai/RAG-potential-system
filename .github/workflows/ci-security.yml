@@ -1,0 +1,69 @@
+# ==============================================================================
+# Reference CI Pipeline — SBOM generation, vulnerability scanning, and
+# keyless image signing on every push to main.
+#
+# This is provided as a REFERENCE for how the manual security-scan.sh steps
+# would be automated in a real CI/CD pipeline. Adjust registry/secrets
+# configuration for your actual environment before relying on this.
+# ==============================================================================
+
+name: Security Pipeline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write    # required for keyless Cosign signing via OIDC
+  packages: write     # if pushing to GitHub Container Registry
+
+jobs:
+  build-scan-sign:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t rag-platform/rag-api:${{ github.sha }} ./app
+
+      - name: Generate SBOM (Syft)
+        uses: anchore/sbom-action@v0
+        with:
+          image: rag-platform/rag-api:${{ github.sha }}
+          format: cyclonedx-json
+          output-file: sbom.json
+
+      - name: Scan for vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: rag-platform/rag-api:${{ github.sha }}
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: "1"   # fail the build on HIGH/CRITICAL findings
+
+      - name: Log in to registry
+        if: success()
+        run: echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login <your-registry> -u "${{ secrets.REGISTRY_USER }}" --password-stdin
+
+      - name: Push image
+        if: success()
+        run: |
+          docker tag rag-platform/rag-api:${{ github.sha }} <your-registry>/rag-api:${{ github.sha }}
+          docker push <your-registry>/rag-api:${{ github.sha }}
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image (keyless)
+        run: cosign sign --yes <your-registry>/rag-api:${{ github.sha }}
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json

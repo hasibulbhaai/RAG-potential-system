@@ -1,0 +1,20 @@
+# Environment / secrets
+.env
+
+# Data
+data/documents/*
+!data/documents/.gitkeep
+
+# Security scan output (regenerate, don't commit stale reports)
+security-reports/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/

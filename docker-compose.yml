@@ -1,0 +1,149 @@
+version: "3.9"
+
+# ==============================================================================
+# Self-Hosted RAG Assistant Platform — Full Stack
+# ==============================================================================
+# Services:
+#   ollama      - LLM serving (self-hosted, CPU or GPU)
+#   qdrant      - Vector database for embeddings/retrieval
+#   rag-api     - FastAPI + LangChain RAG orchestration layer
+#   nginx       - Reverse proxy / single entry point
+#   prometheus  - Metrics collection
+#   grafana     - Metrics dashboards
+# ==============================================================================
+
+services:
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: rag-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"       # Exposed for local debugging only; nginx does not proxy this directly
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 10G
+        reservations:
+          memory: 4G
+    # Uncomment below if the VM has an NVIDIA GPU + nvidia-container-toolkit installed
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    networks:
+      - rag_internal
+
+  qdrant:
+    image: qdrant/qdrant:v1.9.2
+    container_name: rag-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"         # REST API — internal only in production; exposed here for POC debugging
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:6333/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - rag_internal
+
+  rag-api:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    image: rag-platform/rag-api:latest
+    container_name: rag-api
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - MODEL_NAME=${MODEL_NAME:-llama3.1:8b}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
+      - COLLECTION_NAME=${COLLECTION_NAME:-rag_documents}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    ports:
+      - "8000:8000"         # Also proxied via nginx on port 80
+    volumes:
+      - ./data/documents:/app/documents:ro     # Mount source documents for ingestion
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - rag_internal
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: rag-nginx
+    restart: unless-stopped
+    depends_on:
+      - rag-api
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - rag_internal
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: rag-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - rag_internal
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: rag-grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
+      - ./monitoring/grafana/dashboard.json:/var/lib/grafana/dashboards/rag-dashboard.json:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - rag_internal
+
+networks:
+  rag_internal:
+    driver: bridge
+
+volumes:
+  ollama_data:
+  qdrant_data:
+  prometheus_data:
+  grafana_data:
