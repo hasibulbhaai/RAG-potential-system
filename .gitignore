@@ -4,6 +4,8 @@
 # Data
 data/documents/*
 !data/documents/.gitkeep
+Intensive_12Week_Sprint_Plan.md
+Upskilling_Roadmap.md
 
 # Security scan output (regenerate, don't commit stale reports)
 security-reports/
