@@ -50,7 +50,7 @@ else
 fi
 
 # --- Ollama direct check -------------------------------------------------------------
-if docker compose exec -T ollama curl -sf http://localhost:11434/api/tags &> /dev/null; then
+if curl -sf "http://$HOST:11434/api/tags" &> /dev/null || docker compose exec -T ollama ollama list &> /dev/null; then
     pass "Ollama API responding"
 else
     fail "Ollama API not responding"
